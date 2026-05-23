@@ -57,6 +57,10 @@ ext-tilldone:
 ext-agent-team:
     pi -e extensions/agent-team.ts -e extensions/theme-cycler.ts
 
+# 10b. Agent team interactive: live panels, direct messaging, checkpoint system
+ext-agent-team-interactive:
+    pi -e extensions/agent-team-interactive.ts -e extensions/theme-cycler.ts
+
 # 11. System select: /system to pick an agent persona as system prompt
 ext-system-select:
     pi -e extensions/system-select.ts -e extensions/minimal.ts -e extensions/theme-cycler.ts

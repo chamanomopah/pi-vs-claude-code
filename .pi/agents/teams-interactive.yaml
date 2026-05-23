@@ -1,0 +1,40 @@
+# Agent Teams Configuration for Interactive Extension
+# Each team defines a set of agents that can be used together
+# Use /team command to switch between teams
+
+# Full team with all specialists
+full:
+  - scout
+  - planner
+  - builder
+  - reviewer
+  - documenter
+  - red-team
+
+# Planning and building workflow
+plan-build:
+  - planner
+  - builder
+  - reviewer
+
+# Information gathering and documentation
+info:
+  - scout
+  - documenter
+  - reviewer
+
+# Frontend development
+frontend:
+  - planner
+  - builder
+  - bowser
+
+# Pi meta-development (building Pi extensions)
+pi-pi:
+  - ext-expert
+  - theme-expert
+  - skill-expert
+  - config-expert
+  - tui-expert
+  - prompt-expert
+  - agent-expert
