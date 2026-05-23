@@ -36,6 +36,7 @@ import {
 	matchesKey,
 	Key,
 	truncateToWidth,
+	visibleWidth,
 	getMarkdownTheme,
 	type AutocompleteItem,
 } from "@mariozechner/pi-tui";
@@ -1108,6 +1109,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("checkpoint", {
 		description: "Create a checkpoint: /checkpoint <label>",
 		handler: async (args, ctx) => {
+			if (!processManager || !panelManager) {
+				ctx.ui.notify("Extension not initialized yet.", "error");
+				return;
+			}
 			const label = args?.trim() || "checkpoint";
 			const agentNames = teams[activeTeamName] || [];
 
@@ -1129,6 +1134,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("undo", {
 		description: "Revert to previous checkpoint",
 		handler: async (_args, ctx) => {
+			if (!processManager || !panelManager) {
+				ctx.ui.notify("Extension not initialized yet.", "error");
+				return;
+			}
 			const agentNames = teams[activeTeamName] || [];
 			let undone = 0;
 
@@ -1150,6 +1159,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("timeline", {
 		description: "Show checkpoint timeline with navigation",
 		handler: async (_args, ctx) => {
+			if (!processManager || !panelManager) {
+				ctx.ui.notify("Extension not initialized yet.", "error");
+				return;
+			}
 			const agentNames = teams[activeTeamName] || [];
 			const allCheckpoints: Array<{ checkpoint: Checkpoint; agent: string }> = [];
 
@@ -1201,6 +1214,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("fork", {
 		description: "Create new session branch from checkpoint: /fork <checkpoint-id>",
 		handler: async (args, ctx) => {
+			if (!processManager || !panelManager) {
+				ctx.ui.notify("Extension not initialized yet.", "error");
+				return;
+			}
 			const checkpointId = args?.trim();
 			if (!checkpointId) {
 				ctx.ui.notify("Usage: /fork <checkpoint-id>", "error");
@@ -1233,18 +1250,24 @@ export default function (pi: ExtensionAPI) {
 		const toMatch = input.match(/^\/to\s+(\S+)\s*(.*)$/);
 
 		if (toMatch) {
+			if (!processManager || !panelManager) {
+				ctx.ui.notify("Extension not initialized yet. Wait for session_start.", "error");
+				return { handled: true };
+			}
+
 			const agentName = toMatch[1];
 			const message = toMatch[2] || "";
 
 			if (!message) {
 				ctx.ui.notify(`Usage: /to ${agentName} <message>`, "error");
-				return;
+				return { handled: true };
 			}
 
 			const agentDef = allAgentDefs.find(d => d.name.toLowerCase() === agentName.toLowerCase());
 			if (!agentDef) {
-				ctx.ui.notify(`Agent "${agentName}" not found.`, "error");
-				return;
+				const available = allAgentDefs.map(d => d.name).join(", ");
+				ctx.ui.notify(`Agent "${agentName}" not found.\nAvailable: ${available}`, "error");
+				return { handled: true };
 			}
 
 			await processManager.spawnAgent(

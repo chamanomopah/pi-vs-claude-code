@@ -1,0 +1,253 @@
+// AgentProcessManager - Spawns and manages agent processes
+
+import { spawn } from "child_process";
+import type { AgentDef, AgentSessionState, AgentProcess, Checkpoint } from "../types.js";
+import { SessionStorage } from "../storage.js";
+import { CheckpointManager } from "../checkpoints.js";
+import { generateId } from "../utils.js";
+
+export class AgentProcessManager {
+	private processes: Map<string, AgentProcess> = new Map();
+	private sessionStorage: SessionStorage;
+	private checkpointManager: CheckpointManager;
+
+	constructor(sessionStorage: SessionStorage) {
+		this.sessionStorage = sessionStorage;
+		this.checkpointManager = new CheckpointManager();
+	}
+
+	spawnAgent(
+		agentDef: AgentDef,
+		task: string,
+		ctx: any,
+		onUpdate: (state: AgentSessionState) => void,
+	): Promise<{ output: string; exitCode: number; elapsed: number }> {
+		const key = agentDef.name.toLowerCase();
+
+		// Kill existing process if running
+		if (this.processes.has(key)) {
+			this.killAgent(key);
+		}
+
+		// Create session state
+		const sessionId = generateId();
+		const state: AgentSessionState = {
+			sessionId,
+			agentName: agentDef.name,
+			status: "thinking",
+			currentTask: task,
+			messages: [],
+			checkpoints: [],
+			currentCheckpointIndex: -1,
+			lastWork: "",
+			toolCount: 0,
+			elapsed: 0,
+			contextPct: 0,
+		};
+
+		// Try to load existing session
+		const existing = this.sessionStorage.loadSession(agentDef.name, sessionId);
+		if (existing) {
+			state.messages = existing.messages || [];
+			state.checkpoints = existing.checkpoints || [];
+		}
+
+		const startTime = Date.now();
+		state.timer = setInterval(() => {
+			state.elapsed = Date.now() - startTime;
+			onUpdate(state);
+		}, 1000);
+
+		const model = ctx.model
+			? `${ctx.model.provider}/${ctx.model.id}`
+			: "openrouter/google/gemini-3-flash-preview";
+
+		const args = [
+			"--mode",
+			"json",
+			"-p",
+			"--no-extensions",
+			"--model",
+			model,
+			"--tools",
+			agentDef.tools,
+			"--thinking",
+			"off",
+			"--append-system-prompt",
+			agentDef.systemPrompt,
+		];
+
+		args.push(task);
+
+		const textChunks: string[] = [];
+
+		return new Promise((resolve) => {
+			const proc = spawn("pi", args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env },
+			});
+
+			let buffer = "";
+
+			proc.stdout!.setEncoding("utf-8");
+			proc.stdout!.on("data", (chunk: string) => {
+				buffer += chunk;
+				const lines = buffer.split("\n");
+				buffer = lines.pop() || "";
+
+				for (const line of lines) {
+					if (!line.trim()) continue;
+					try {
+						const event = JSON.parse(line);
+						if (event.type === "message_update") {
+							const delta = event.assistantMessageEvent;
+							if (delta?.type === "text_delta") {
+								textChunks.push(delta.delta || "");
+								const full = textChunks.join("");
+								const last = full.split("\n").filter((l: string) => l.trim()).pop() || "";
+								state.lastWork = last;
+
+								// Add to messages as streaming update
+								if (state.messages.length === 0 ||
+									state.messages[state.messages.length - 1].role !== "assistant") {
+									state.messages.push({
+										role: "assistant",
+										content: full,
+										timestamp: Date.now(),
+									});
+								} else {
+									state.messages[state.messages.length - 1].content = full;
+								}
+								onUpdate(state);
+							}
+						} else if (event.type === "tool_execution_start") {
+							state.status = "working";
+							state.toolCount++;
+							onUpdate(state);
+						} else if (event.type === "message_end") {
+							const msg = event.message;
+							if (msg?.usage && ctx.model?.contextWindow) {
+								state.contextPct = ((msg.usage.input || 0) / ctx.model.contextWindow) * 100;
+								onUpdate(state);
+							}
+						} else if (event.type === "agent_end") {
+							const msgs = event.messages || [];
+							const last = [...msgs].reverse().find((m: any) => m.role === "assistant");
+							if (last?.usage && ctx.model?.contextWindow) {
+								state.contextPct = ((last.usage.input || 0) / ctx.model.contextWindow) * 100;
+								onUpdate(state);
+							}
+						}
+					} catch {}
+				}
+			});
+
+			proc.stderr!.setEncoding("utf-8");
+			proc.stderr!.on("data", () => {});
+
+			proc.on("close", (code) => {
+				if (buffer.trim()) {
+					try {
+						const event = JSON.parse(buffer);
+						if (event.type === "message_update") {
+							const delta = event.assistantMessageEvent;
+							if (delta?.type === "text_delta") textChunks.push(delta.delta || "");
+						}
+					} catch {}
+				}
+
+				clearInterval(state.timer);
+				state.elapsed = Date.now() - startTime;
+				state.status = code === 0 ? "idle" : "error";
+
+				const full = textChunks.join("");
+				state.lastWork = full.split("\n").filter((l: string) => l.trim()).pop() || "";
+
+				// Save final message
+				if (state.messages.length > 0 && state.messages[state.messages.length - 1].role === "assistant") {
+					state.messages[state.messages.length - 1].content = full;
+				}
+
+				// Save session
+				this.sessionStorage.saveSession(agentDef.name, state);
+
+				this.processes.delete(key);
+				onUpdate(state);
+
+				resolve({
+					output: full,
+					exitCode: code ?? 1,
+					elapsed: state.elapsed,
+				});
+			});
+
+			proc.on("error", (err) => {
+				clearInterval(state.timer);
+				state.status = "error";
+				state.lastWork = `Error: ${err.message}`;
+				this.processes.delete(key);
+				onUpdate(state);
+				resolve({
+					output: `Error spawning agent: ${err.message}`,
+					exitCode: 1,
+					elapsed: Date.now() - startTime,
+				});
+			});
+
+			this.processes.set(key, { proc, state, buffer, textChunks, startTime });
+		});
+	}
+
+	killAgent(agentName: string): void {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		if (procInfo) {
+			procInfo.proc.kill();
+			clearInterval(procInfo.state.timer);
+			this.processes.delete(key);
+		}
+	}
+
+	createCheckpoint(agentName: string, label: string): Checkpoint | null {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		if (!procInfo) return null;
+
+		return this.checkpointManager.createCheckpoint(procInfo.state, label);
+	}
+
+	restoreCheckpoint(agentName: string, checkpointId: string): boolean {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		if (!procInfo) return false;
+
+		return this.checkpointManager.restoreCheckpoint(procInfo.state, checkpointId);
+	}
+
+	undo(agentName: string): boolean {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		if (!procInfo) return false;
+
+		return this.checkpointManager.undo(procInfo.state);
+	}
+
+	getState(agentName: string): AgentSessionState | null {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		return procInfo?.state || null;
+	}
+
+	listCheckpoints(agentName: string): Checkpoint[] {
+		const key = agentName.toLowerCase();
+		const procInfo = this.processes.get(key);
+		if (!procInfo) return [];
+		return this.checkpointManager.listCheckpoints(procInfo.state);
+	}
+
+	cleanup(): void {
+		for (const key of this.processes.keys()) {
+			this.killAgent(key);
+		}
+	}
+}
