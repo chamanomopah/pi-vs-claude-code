@@ -1,0 +1,10 @@
+{
+  "lastChangelogVersion": "0.63.2",
+  "defaultProvider": "zai",
+  "defaultModel": "zai/glm-5.1",
+  "defaultThinkingLevel": "high",
+  "theme": "dracula",
+  "enabledModels": [
+    "zai/glm-5.1"
+  ]
+}
