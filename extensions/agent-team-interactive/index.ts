@@ -28,7 +28,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type, StringEnum } from "@sinclair/typebox";
 import { Text, truncateToWidth, visibleWidth, type AutocompleteItem, type Theme } from "@mariozechner/pi-tui";
-import { readFileSync, existsSync, join } from "fs";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 
 import type { AgentDef, AgentSessionState, Checkpoint } from "./types.js";
 import { displayName, parseTeamsYaml, generateId } from "./utils.js";

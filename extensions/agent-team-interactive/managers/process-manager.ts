@@ -24,6 +24,12 @@ export class AgentProcessManager {
 	): Promise<{ output: string; exitCode: number; elapsed: number }> {
 		const key = agentDef.name.toLowerCase();
 
+		// LOG: Início do spawn
+		console.error(`[agent-team-interactive] Spawning agent: ${agentDef.name}`);
+		console.error(`[agent-team-interactive] Task: ${task.slice(0, 100)}...`);
+		console.error(`[agent-team-interactive] Platform: ${process.platform}`);
+		console.error(`[agent-team-interactive] Agent tools: ${agentDef.tools}`);
+
 		// Kill existing process if running
 		if (this.processes.has(key)) {
 			this.killAgent(key);
@@ -62,6 +68,9 @@ export class AgentProcessManager {
 			? `${ctx.model.provider}/${ctx.model.id}`
 			: "openrouter/google/gemini-3-flash-preview";
 
+		// LOG: Modelo
+		console.error(`[agent-team-interactive] Model: ${model}`);
+
 		const args = [
 			"--mode",
 			"json",
@@ -79,10 +88,23 @@ export class AgentProcessManager {
 
 		args.push(task);
 
+		// LOG: Argumentos completos
+		console.error(`[agent-team-interactive] Command: pi ${args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ")}`);
+		console.error(`[agent-team-interactive] Args count: ${args.length}`);
+
+		// Detectar plataforma e ajustar comando
+		const isWindows = process.platform === "win32";
+		const piCommand = isWindows ? "pi.cmd" : "pi";
+		console.error(`[agent-team-interactive] Using command: ${piCommand} (isWindows: ${isWindows})`);
+
 		const textChunks: string[] = [];
 
 		return new Promise((resolve) => {
-			const proc = spawn("pi", args, {
+			const proc = spawn(piCommand, args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env },
+				shell: isWindows,
+			});
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
@@ -143,7 +165,10 @@ export class AgentProcessManager {
 			});
 
 			proc.stderr!.setEncoding("utf-8");
-			proc.stderr!.on("data", () => {});
+			proc.stderr!.on("data", (chunk: string) => {
+				// LOG: Stderr (útil para diagnosticar problemas)
+				console.error(`[agent-team-interactive] STDERR: ${chunk}`);
+			});
 
 			proc.on("close", (code) => {
 				if (buffer.trim()) {
