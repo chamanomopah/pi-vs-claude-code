@@ -60,10 +60,10 @@ export function renderAgentMessage(options: FeedMessageOptions, theme: Theme): T
 		);
 	}
 
-	// Get message content
+	// Get message content - prefer fullContent over lastWork for complete display
 	const content = state.messages.length > 0
 		? state.messages[state.messages.length - 1].content
-		: state.lastWork || "";
+		: state.fullContent || state.lastWork || "";
 
 	if (!content) {
 		return new Text(
@@ -127,10 +127,10 @@ export function formatAgentMessageForPrint(
 	// Collapse toggle indicator
 	const collapseIndicator = collapsed ? "▸" : "▾";
 
-	// Get message content
+	// Get message content - prefer fullContent over lastWork for complete display
 	const content = state.messages.length > 0
 		? state.messages[state.messages.length - 1].content
-		: state.lastWork || "";
+		: state.fullContent || state.lastWork || "";
 
 	if (!content) {
 		return `${theme.fg(color, theme.bold(name))} ${theme.fg(statusColor, statusIcon)} ${theme.fg("dim", `[${state.status}]`)} ${theme.fg("dim", collapseIndicator)} ${theme.fg("dim", timestamp)}\n${theme.fg("dim", "No content yet...")}`;

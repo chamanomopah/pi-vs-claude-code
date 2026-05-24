@@ -109,10 +109,11 @@ export class AgentPanel {
 			container.addChild(msgBox);
 		}
 
-		// Current work in progress
-		if (this.state.lastWork && (this.state.status === "thinking" || this.state.status === "working")) {
+		// Current work in progress - use fullContent for complete display
+		const currentWork = this.state.fullContent || this.state.lastWork || "";
+		if (currentWork && (this.state.status === "thinking" || this.state.status === "working")) {
 			container.addChild(new Spacer(1));
-			const workPreview = this.state.lastWork.replace(/\n/g, " ").substring(0, width - 10);
+			const workPreview = currentWork.replace(/\n/g, " ").substring(0, width - 10);
 			container.addChild(
 				new Text(theme.fg("accent", "▸ ") + theme.fg("muted", workPreview + "..."), 0, 0)
 			);

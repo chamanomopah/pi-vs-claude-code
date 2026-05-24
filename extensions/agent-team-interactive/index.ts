@@ -223,20 +223,15 @@ export default function (pi: ExtensionAPI) {
 								: state.status === "error" ? "✗"
 								: "✓";
 
-							const statusColor = state.status === "thinking" ? "accent"
-								: state.status === "working" ? "warning"
-								: state.status === "error" ? "error"
-								: "success";
-
 							const elapsed = Math.round(state.elapsed / 1000);
 							const header = `${statusIcon} ${agentDef.name} ${elapsed}s`;
 
 							// Build content with accumulated fullContent
-							let contentText = header;
-							if (state.fullContent) {
-								contentText += "\n\n" + state.fullContent;
-							} else if (state.lastWork) {
-								contentText += "\n\n" + state.lastWork;
+							let contentText = state.fullContent || "";
+							if (contentText) {
+								contentText = header + "\n\n" + contentText;
+							} else {
+								contentText = header;
 							}
 
 							onUpdate({
@@ -304,41 +299,26 @@ export default function (pi: ExtensionAPI) {
 			const agentColor = details.agentColor || "accent";
 			const agentName = details.agent || "?";
 
-			// Streaming state - show accumulated content
+			// Get the full content text
+			const contentText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+			// Streaming state - show icon with content
 			if (options.isPartial || details.status === "thinking" || details.status === "working") {
 				const statusIcon = details.status === "working" ? "⚙" : "●";
 				const elapsed = typeof details.elapsed === "number" ? Math.round(details.elapsed / 1000) : 0;
 				const header = theme.fg(agentColor, `${statusIcon} ${agentName} ${elapsed}s`);
 
-				const contentText = result.content[0]?.type === "text" ? result.content[0].text : "";
-				const lines = contentText.split("\n");
-				const bodyContent = lines.length > 1 ? contentText.substring(contentText.indexOf("\n") + 1) : "";
-
-				return new Text(
-					header +
-					(bodyContent ? "\n\n" + theme.fg("dim", bodyContent) : ""),
-					0,
-					0,
-				);
+				return new Text(header + "\n\n" + contentText, 0, 0);
 			}
 
-			// Final state - show summary
+			// Final state - show success/error icon with content
 			const isSuccess = details.status === "done" || details.status === "idle" || details.status === "talking";
 			const icon = isSuccess ? "✓" : "✗";
 			const color = isSuccess ? "success" : "error";
 			const elapsed = typeof details.elapsed === "number" ? Math.round(details.elapsed / 1000) : 0;
-			const header = theme.fg(color, `${icon} ${agentName}`) + theme.fg("dim", ` ${elapsed}s`);
+			const header = theme.fg(color, `${icon} ${agentName} ${elapsed}s`);
 
-			const contentText = result.content[0]?.type === "text" ? result.content[0].text : "";
-			const lines = contentText.split("\n");
-			const bodyContent = lines.length > 1 ? contentText.substring(contentText.indexOf("\n") + 1) : "";
-
-			return new Text(
-				header +
-				(bodyContent ? "\n\n" + theme.fg("dim", bodyContent) : ""),
-				0,
-				0,
-			);
+			return new Text(header + "\n\n" + contentText, 0, 0);
 		},
 	});
 

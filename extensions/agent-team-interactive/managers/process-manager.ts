@@ -191,7 +191,8 @@ export class AgentProcessManager {
 							}
 							scheduleUpdate(true);
 						}
-					} catch {}
+					} catch (err) {
+						console.error(`[agent-${agentDef.name}] JSON parse error: ${err}`);
 				}
 			});
 
@@ -217,16 +218,24 @@ export class AgentProcessManager {
 
 				clearInterval(state.timer);
 				state.elapsed = Date.now() - startTime;
-				state.status = code === 0 ? "idle" : "error";
+				// Treat null/undefined as success (0) - common on Windows
+				const exitCode = (code ?? 0);
+				state.status = exitCode === 0 ? "idle" : "error";
 
 				// Mark session file as available for resume
-				if (code === 0) {
+				if (exitCode === 0) {
 					state.sessionFile = agentSessionFile;
 				}
 
 				const full = textChunks.join("");
 				state.fullContent = full;
 				state.lastWork = full.split("\n").filter((l: string) => l.trim()).pop() || "";
+
+				// Debug: log captured content length
+				console.error(`[agent-${agentDef.name}] Captured ${full.length} chars, ${textChunks.length} chunks`);
+				if (full.length > 0 && full.length < 100) {
+					console.error(`[agent-${agentDef.name}] Content preview: "${full.substring(0, 50)}..."`);
+				}
 
 				// Save final message
 				if (state.messages.length > 0 && state.messages[state.messages.length - 1].role === "assistant") {
@@ -241,7 +250,7 @@ export class AgentProcessManager {
 
 				resolve({
 					output: full,
-					exitCode: code ?? 1,
+					exitCode: exitCode,
 					elapsed: state.elapsed,
 				});
 			});
