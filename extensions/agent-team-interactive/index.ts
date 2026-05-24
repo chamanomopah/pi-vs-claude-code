@@ -1,17 +1,20 @@
 /**
- * Agent Team Interactive — Multi-agent orchestration with live panels and checkpoint system
+ * Agent Team Interactive — Multi-agent orchestration with feed-based UI
  *
  * A next-generation multi-agent orchestration extension that provides real-time visibility
  * into each agent's thinking process, direct communication channels, checkpoint-based session
  * management with undo/fork capabilities, and persistent session history tracking.
  *
  * Features:
- * - Live-updating TUI panels showing each agent's message stream
+ * - Inline feed messages showing each agent's output (fully expanded by default)
  * - Direct communication with individual agents via /to <agent>
  * - Checkpoint system for undo/fork of agent conversations
  * - Session persistence to .pi/agent-sessions/
  * - Timeline navigation with keyboard shortcuts
- * - Orchestrator pattern for agent coordination
+ * - Color-coded agent messages in feed
+ * - Minimal agent icons in footer
+ * - Collapse/expand for all agent messages (Alt+A)
+ * - Collapse/expand for specific agent (Alt+1, Alt+2...)
  *
  * Commands:
  *   /team                 — switch active team
@@ -22,23 +25,25 @@
  *   /timeline             — show checkpoint history with navigation
  *   /revert <msg-id>      — revert to specific message
  *
- * Usage: pi -e extensions/agent-team-interactive.ts -e extensions/theme-cycler.ts
+ * Usage: pi -e extensions/agent-team-interactive.ts
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type, StringEnum } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 import { Text, truncateToWidth, visibleWidth, type AutocompleteItem, type Theme } from "@mariozechner/pi-tui";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
-import type { AgentDef, AgentSessionState, Checkpoint } from "./types.js";
+import type { AgentDef, AgentSessionState, Checkpoint, CollapseStateManager } from "./types.js";
+import { getAgentColor } from "./types.js";
 import { displayName, parseTeamsYaml, generateId } from "./utils.js";
 import { scanAgentDirs } from "./agent-scanner.js";
 import { SessionStorage } from "./storage.js";
-import { PanelManager } from "./managers/panel-manager.js";
+import { MessageManager } from "./managers/message-manager.js";
 import { AgentProcessManager } from "./managers/process-manager.js";
 import { TimelineUI } from "./components/timeline-ui.js";
 import { applyExtensionDefaults } from "../themeMap.js";
+import { CollapseStateManager as CollapseStateMgr } from "./types.js";
 
 export default function (pi: ExtensionAPI) {
 	let allAgentDefs: AgentDef[] = [];
@@ -48,15 +53,26 @@ export default function (pi: ExtensionAPI) {
 	let contextWindow = 0;
 	let sessionStorage: SessionStorage;
 	let processManager: AgentProcessManager;
-	let panelManager: PanelManager;
+	let messageManager: MessageManager;
+	let collapseManager: CollapseStateManager;
 	let orchestratorMessage = "";
+	let selectedAgent = "";
+	let activeAgents: AgentDef[] = [];
 
 	function loadAgents(cwd: string) {
 		sessionStorage = new SessionStorage(cwd);
 		processManager = new AgentProcessManager(sessionStorage);
-		panelManager = new PanelManager();
+		collapseManager = new CollapseStateMgr();
+		messageManager = new MessageManager(collapseManager);
 
 		allAgentDefs = scanAgentDirs(cwd);
+
+		// Assign colors to agents that don't have one from frontmatter
+		for (const agent of allAgentDefs) {
+			if (!agent.agentColor) {
+				agent.agentColor = getAgentColor(agent.name);
+			}
+		}
 
 		const teamsPath = join(cwd, ".pi", "agents", "teams-interactive.yaml");
 		if (existsSync(teamsPath)) {
@@ -66,7 +82,6 @@ export default function (pi: ExtensionAPI) {
 				teams = {};
 			}
 		} else {
-			// Fallback to regular teams.yaml
 			const regularTeamsPath = join(cwd, ".pi", "agents", "teams.yaml");
 			if (existsSync(regularTeamsPath)) {
 				try {
@@ -84,49 +99,84 @@ export default function (pi: ExtensionAPI) {
 
 	function activateTeam(teamName: string) {
 		activeTeamName = teamName;
-		panelManager = new PanelManager();
 		const members = teams[teamName] || [];
 		const defsByName = new Map(allAgentDefs.map(d => [d.name.toLowerCase(), d]));
 
+		activeAgents = [];
 		for (const member of members) {
 			const def = defsByName.get(member.toLowerCase());
 			if (!def) continue;
-
-			const state: AgentSessionState = {
-				sessionId: generateId(),
-				agentName: def.name,
-				status: "idle",
-				currentTask: "",
-				messages: [],
-				checkpoints: [],
-				currentCheckpointIndex: -1,
-				lastWork: "",
-				toolCount: 0,
-				elapsed: 0,
-				contextPct: 0,
-			};
-
-			panelManager.createPanel(def.name, def, state);
+			activeAgents.push(def);
 		}
 
-		updateWidget();
+		if (activeAgents.length > 0) {
+			selectedAgent = activeAgents[0].name;
+		}
+
+		updateFooter();
 	}
 
-	function updateWidget() {
+	function updateFooter() {
 		if (!widgetCtx) return;
+		const ctx = widgetCtx;
 
-		widgetCtx.ui.setWidget("agent-team-interactive", (_tui: any, theme: Theme) => {
-			const text = new Text("", 0, 1);
+		ctx.ui.setFooter((_tui, theme, _footerData) => ({
+			dispose: () => {},
+			invalidate() {},
+			render(width: number): string[] {
+				const model = ctx.model?.id || "no-model";
+				const usage = ctx.getContextUsage();
+				const pct = usage ? usage.percent : 0;
+				const filled = Math.round(pct / 10);
+				const bar = "#".repeat(filled) + "-".repeat(10 - filled);
 
-			return {
-				render(width: number, height: number): string[] {
-					return panelManager.render(width, height, theme);
-				},
-				invalidate() {
-					text.invalidate();
-				},
-			};
-		});
+				// Agent icons
+				const icons: string[] = [];
+				for (let i = 0; i < activeAgents.length; i++) {
+					const agent = activeAgents[i];
+					const state = processManager.getState(agent.name);
+					const status = state?.status || "idle";
+					const isSelected = agent.name === selectedAgent;
+
+					let statusDot = "●";
+					let statusColor = "dim";
+					if (status === "thinking") {
+						statusColor = "accent";
+					} else if (status === "working") {
+						statusColor = "warning";
+					} else if (status === "error") {
+						statusColor = "error";
+					} else if (status === "idle") {
+						statusDot = "✓";
+						statusColor = "success";
+					}
+
+					const firstChar = agent.name.charAt(0).toUpperCase();
+					const color = agent.agentColor || "cyan";
+
+					if (isSelected) {
+						icons.push(theme.bg("selectedBg",
+							theme.fg(statusColor, statusDot) +
+							theme.fg(color, firstChar)
+						));
+					} else {
+						icons.push(theme.fg(statusColor, statusDot) + theme.fg(color, firstChar));
+					}
+				}
+
+				const iconsStr = icons.length > 0 ? icons.join(" ") + " " : "";
+
+				const left = theme.fg("dim", ` ${model}`) +
+					theme.fg("muted", " · ") +
+					theme.fg("accent", activeTeamName) +
+					" " +
+					iconsStr;
+				const right = theme.fg("dim", `[${bar}] ${Math.round(pct)}% `);
+				const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
+
+				return [truncateToWidth(left + pad + right, width)];
+			},
+		}));
 	}
 
 	// ── Tools Registration ───────────────────────────────────────────────────
@@ -159,18 +209,26 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
+				if (ctx.tui) {
+					messageManager.setContext(ctx.tui, ctx.ui.theme);
+				}
+				selectedAgent = agentDef.name;
+				updateFooter();
+
 				const result = await processManager.spawnAgent(
 					agentDef,
 					message,
 					ctx,
 					(state) => {
-						panelManager.updatePanel(agentDef.name, state);
-						updateWidget();
+						messageManager.postStreamingUpdate(agentDef.name, agentDef, state);
+						updateFooter();
 					},
 				);
 
 				const status = result.exitCode === 0 ? "done" : "error";
 				const summary = `[${agentDef.name}] ${status} in ${Math.round(result.elapsed / 1000)}s`;
+
+				messageManager.postMessage(agentDef.name, agentDef, processManager.getState(agentDef.name)!);
 
 				return {
 					content: [{ type: "text", text: `${summary}\n\n${result.output}` }],
@@ -237,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 			message: Type.String({ description: "Message to send to the orchestrator" }),
 		}),
 
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _signal, _ctx) {
 			const { message } = params as { message: string };
 			orchestratorMessage = message;
 
@@ -259,7 +317,7 @@ export default function (pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, options, theme) {
+		renderResult(result, _options, theme) {
 			const details = result.details as any;
 			if (!details) {
 				const text = result.content[0];
@@ -305,7 +363,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("checkpoint", {
 		description: "Create a checkpoint: /checkpoint <label>",
 		handler: async (args, ctx) => {
-			if (!processManager || !panelManager) {
+			if (!processManager) {
 				ctx.ui.notify("Extension not initialized yet.", "error");
 				return;
 			}
@@ -315,14 +373,10 @@ export default function (pi: ExtensionAPI) {
 			for (const agentName of agentNames) {
 				const checkpoint = processManager.createCheckpoint(agentName, label);
 				if (checkpoint) {
-					const state = processManager.getState(agentName);
-					if (state) {
-						panelManager.updatePanel(agentName, state);
-					}
+					ctx.tui?.log(`Checkpoint created for ${agentName}: ${label}`);
 				}
 			}
 
-			updateWidget();
 			ctx.ui.notify(`Checkpoint created: ${label}`, "success");
 		},
 	});
@@ -330,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("undo", {
 		description: "Revert to previous checkpoint",
 		handler: async (_args, ctx) => {
-			if (!processManager || !panelManager) {
+			if (!processManager) {
 				ctx.ui.notify("Extension not initialized yet.", "error");
 				return;
 			}
@@ -339,15 +393,10 @@ export default function (pi: ExtensionAPI) {
 
 			for (const agentName of agentNames) {
 				if (processManager.undo(agentName)) {
-					const state = processManager.getState(agentName);
-					if (state) {
-						panelManager.updatePanel(agentName, state);
-					}
 					undone++;
 				}
 			}
 
-			updateWidget();
 			ctx.ui.notify(`Undone to previous checkpoint (${undone} agents)`, "info");
 		},
 	});
@@ -355,7 +404,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("timeline", {
 		description: "Show checkpoint timeline with navigation",
 		handler: async (_args, ctx) => {
-			if (!processManager || !panelManager) {
+			if (!processManager) {
 				ctx.ui.notify("Extension not initialized yet.", "error");
 				return;
 			}
@@ -381,11 +430,6 @@ export default function (pi: ExtensionAPI) {
 						const item = allCheckpoints.find(c => c.checkpoint.id === checkpointId);
 						if (item) {
 							processManager.restoreCheckpoint(item.agent, checkpointId);
-							const state = processManager.getState(item.agent);
-							if (state) {
-								panelManager.updatePanel(item.agent, state);
-							}
-							updateWidget();
 							ctx.ui.notify(`Restored checkpoint: ${item.checkpoint.label}`, "success");
 						}
 						done(undefined);
@@ -410,7 +454,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("fork", {
 		description: "Create new session branch from checkpoint: /fork <checkpoint-id>",
 		handler: async (args, ctx) => {
-			if (!processManager || !panelManager) {
+			if (!processManager) {
 				ctx.ui.notify("Extension not initialized yet.", "error");
 				return;
 			}
@@ -428,66 +472,70 @@ export default function (pi: ExtensionAPI) {
 					const state = processManager.getState(agentName);
 					if (state) {
 						state.sessionId = generateId();
-						panelManager.updatePanel(agentName, state);
 						forked++;
 					}
 				}
 			}
 
-			updateWidget();
 			ctx.ui.notify(`Forked from checkpoint (${forked} agents)`, "success");
 		},
 	});
 
+	pi.registerCommand("to", {
+		description: "Send message directly to an agent: /to <agent> <message>",
+		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
+			return allAgentDefs.map(agent => ({
+				value: agent.name,
+				label: displayName(agent.name),
+			})).filter(item => item.value.toLowerCase().startsWith(prefix.toLowerCase()));
+		},
+		handler: async (args, ctx) => {
+			if (!processManager) {
+				ctx.ui.notify("Extension not initialized yet. Wait for session_start.", "error");
+				return;
+			}
 
-		// ── Command: /to <agent> <message> ───────────────────────────────────────
+			if (!args || args.trim().length === 0) {
+				ctx.ui.notify("Usage: /to <agent> <message>", "error");
+				return;
+			}
 
-		pi.registerCommand("to", {
-			description: "Send message directly to an agent: /to <agent> <message>",
-			getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-				return allAgentDefs.map(agent => ({
-					value: agent.name,
-					label: displayName(agent.name),
-				})).filter(item => item.value.toLowerCase().startsWith(prefix.toLowerCase()));
-			},
-			handler: async (args, ctx) => {
-				if (!processManager || !panelManager) {
-					ctx.ui.notify("Extension not initialized yet. Wait for session_start.", "error");
-					return;
-				}
+			const parts = args.trim().split(/\s+/);
+			const agentName = parts[0];
+			const message = parts.slice(1).join(" ");
 
-				if (!args || args.trim().length === 0) {
-					ctx.ui.notify("Usage: /to <agent> <message>", "error");
-					return;
-				}
+			if (!message) {
+				ctx.ui.notify(`Usage: /to ${agentName} <message>`, "error");
+				return;
+			}
 
-				const parts = args.trim().split(/\s+/);
-				const agentName = parts[0];
-				const message = parts.slice(1).join(" ");
+			const agentDef = allAgentDefs.find(d => d.name.toLowerCase() === agentName.toLowerCase());
+			if (!agentDef) {
+				const available = allAgentDefs.map(d => d.name).join(", ");
+				ctx.ui.notify(`Agent "${agentName}" not found. Available: ${available}`, "error");
+				return;
+			}
 
-				if (!message) {
-					ctx.ui.notify(`Usage: /to ${agentName} <message>`, "error");
-					return;
-				}
+			// Update selected agent for visual feedback
+			selectedAgent = agentDef.name;
+			updateFooter();
+			ctx.ui.notify(`Talking to ${displayName(agentDef.name)}...`, "info");
 
-				const agentDef = allAgentDefs.find(d => d.name.toLowerCase() === agentName.toLowerCase());
-				if (!agentDef) {
-					const available = allAgentDefs.map(d => d.name).join(", ");
-					ctx.ui.notify(`Agent "${agentName}" not found. Available: ${available}`, "error");
-					return;
-				}
+			if (ctx.tui) {
+				messageManager.setContext(ctx.tui, ctx.ui.theme);
+			}
 
-				await processManager.spawnAgent(
-					agentDef,
-					message,
-					ctx,
-					(state) => {
-						panelManager.updatePanel(agentDef.name, state);
-						updateWidget();
-					},
-				);
-			},
-		});
+			await processManager.spawnAgent(
+				agentDef,
+				message,
+				ctx,
+				(state) => {
+					messageManager.postStreamingUpdate(agentDef.name, agentDef, state);
+					updateFooter();
+				},
+			);
+		},
+	});
 
 	// ── System Prompt Override ───────────────────────────────────────────────
 
@@ -527,6 +575,32 @@ ${agentCatalog}`,
 		};
 	});
 
+	// ── Keyboard Handlers ─────────────────────────────────────────────────────
+
+	pi.on("key", async (_event, ctx, key) => {
+		if (!activeAgents.length) return;
+
+		// Alt+A: Toggle all agent messages
+		if (key.name === "a" && key.alt) {
+			messageManager.toggleAllCollapse();
+			ctx.ui.notify("Toggled all agent messages", "info");
+			ctx.tui?.requestRender();
+			return;
+		}
+
+		// Alt+1, Alt+2, etc.: Toggle specific agent message
+		if (key.alt && key.name >= "1" && key.name <= "9") {
+			const idx = parseInt(key.name) - 1;
+			if (idx < activeAgents.length) {
+				const agent = activeAgents[idx];
+				messageManager.toggleCollapse(agent.name);
+				ctx.ui.notify(`Toggled ${displayName(agent.name)}`, "info");
+				ctx.tui?.requestRender();
+			}
+			return;
+		}
+	});
+
 	// ── Session Start ────────────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -546,7 +620,6 @@ ${agentCatalog}`,
 			return;
 		}
 
-		// Prompt for team selection
 		const options = teamNames.map(name => {
 			const members = teams[name].map(m => displayName(m));
 			return `${name} — ${members.join(", ")}`;
@@ -568,30 +641,13 @@ ${agentCatalog}`,
 			`/checkpoint <label>   Create checkpoint\n` +
 			`/undo                 Revert checkpoint\n` +
 			`/timeline             Show checkpoints\n` +
-			`/fork <id>            Fork session`,
+			`/fork <id>            Fork session\n\n` +
+			`Alt+A                 Toggle all messages\n` +
+			`Alt+1,2,3...          Toggle agent message`,
 			"info",
 		);
 
-		// Footer
-		ctx.ui.setFooter((_tui, theme, _footerData) => ({
-			dispose: () => {},
-			invalidate() {},
-			render(width: number): string[] {
-				const model = ctx.model?.id || "no-model";
-				const usage = ctx.getContextUsage();
-				const pct = usage ? usage.percent : 0;
-				const filled = Math.round(pct / 10);
-				const bar = "#".repeat(filled) + "-".repeat(10 - filled);
-
-				const left = theme.fg("dim", ` ${model}`) +
-					theme.fg("muted", " · ") +
-					theme.fg("accent", activeTeamName);
-				const right = theme.fg("dim", `[${bar}] ${Math.round(pct)}% `);
-				const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));
-
-				return [truncateToWidth(left + pad + right, width)];
-			},
-		}));
+		updateFooter();
 	});
 
 	// ── Session End ──────────────────────────────────────────────────────────

@@ -7,11 +7,11 @@ import type { AgentDef } from "./types.js";
 export function parseAgentFile(filePath: string): AgentDef | null {
 	try {
 		const raw = readFileSync(filePath, "utf-8");
-		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+		const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
 		if (!match) return null;
 
 		const frontmatter: Record<string, string> = {};
-		for (const line of match[1].split("\n")) {
+		for (const line of match[1].split(/\r?\n/)) {
 			const idx = line.indexOf(":");
 			if (idx > 0) {
 				frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
@@ -20,16 +20,44 @@ export function parseAgentFile(filePath: string): AgentDef | null {
 
 		if (!frontmatter.name) return null;
 
+		// Map frontmatter color to valid theme color
+		const agentColor = mapColorToTheme(frontmatter.color);
+
 		return {
 			name: frontmatter.name,
 			description: frontmatter.description || "",
 			tools: frontmatter.tools || "read,grep,find,ls",
 			systemPrompt: match[2].trim(),
 			file: filePath,
+			agentColor,
 		};
 	} catch {
 		return null;
 	}
+}
+
+// Map agent frontmatter colors to valid theme semantic colors
+function mapColorToTheme(color?: string): string | undefined {
+	if (!color) return undefined;
+
+	// Map common color names to valid semantic theme colors
+	const colorMap: Record<string, string> = {
+		"orange": "warning",
+		"purple": "accent",
+		"pink": "accent",
+		"gray": "dim",
+		"grey": "dim",
+		"white": "fg",
+		"black": "bg",
+		"cyan": "accent",
+		"green": "success",
+		"yellow": "warning",
+		"blue": "accent",
+		"red": "error",
+		"magenta": "accent",
+	};
+
+	return colorMap[color.toLowerCase()];
 }
 
 export function scanAgentDirs(cwd: string): AgentDef[] {

@@ -1,6 +1,7 @@
 // AgentProcessManager - Spawns and manages agent processes
 
 import { spawn } from "child_process";
+import { join } from "path";
 import type { AgentDef, AgentSessionState, AgentProcess, Checkpoint } from "../types.js";
 import { SessionStorage } from "../storage.js";
 import { CheckpointManager } from "../checkpoints.js";
@@ -24,12 +25,6 @@ export class AgentProcessManager {
 	): Promise<{ output: string; exitCode: number; elapsed: number }> {
 		const key = agentDef.name.toLowerCase();
 
-		// LOG: Início do spawn
-		console.error(`[agent-team-interactive] Spawning agent: ${agentDef.name}`);
-		console.error(`[agent-team-interactive] Task: ${task.slice(0, 100)}...`);
-		console.error(`[agent-team-interactive] Platform: ${process.platform}`);
-		console.error(`[agent-team-interactive] Agent tools: ${agentDef.tools}`);
-
 		// Kill existing process if running
 		if (this.processes.has(key)) {
 			this.killAgent(key);
@@ -37,6 +32,12 @@ export class AgentProcessManager {
 
 		// Create session state
 		const sessionId = generateId();
+
+		// Session file for this agent
+		const agentKey = agentDef.name.toLowerCase().replace(/\s+/g, "-");
+		const sessionDir = this.sessionStorage.getSessionDir();
+		const agentSessionFile = join(sessionDir, `${agentKey}.json`);
+
 		const state: AgentSessionState = {
 			sessionId,
 			agentName: agentDef.name,
@@ -49,6 +50,7 @@ export class AgentProcessManager {
 			toolCount: 0,
 			elapsed: 0,
 			contextPct: 0,
+			sessionFile: null,
 		};
 
 		// Try to load existing session
@@ -68,9 +70,6 @@ export class AgentProcessManager {
 			? `${ctx.model.provider}/${ctx.model.id}`
 			: "openrouter/google/gemini-3-flash-preview";
 
-		// LOG: Modelo
-		console.error(`[agent-team-interactive] Model: ${model}`);
-
 		const args = [
 			"--mode",
 			"json",
@@ -84,27 +83,43 @@ export class AgentProcessManager {
 			"off",
 			"--append-system-prompt",
 			agentDef.systemPrompt,
+			"--session",
+			agentSessionFile,
 		];
+
+		// Continue existing session if we have one
+		if (state.sessionFile) {
+			args.push("-c");
+		}
 
 		args.push(task);
 
-		// LOG: Argumentos completos
-		console.error(`[agent-team-interactive] Command: pi ${args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ")}`);
-		console.error(`[agent-team-interactive] Args count: ${args.length}`);
-
-		// Detectar plataforma e ajustar comando
-		const isWindows = process.platform === "win32";
-		const piCommand = isWindows ? "pi.cmd" : "pi";
-		console.error(`[agent-team-interactive] Using command: ${piCommand} (isWindows: ${isWindows})`);
-
 		const textChunks: string[] = [];
+		let lastUpdateTime = 0;
+		let lastContent = "";
+		let updateTimeout: NodeJS.Timeout | null = null;
+
+		// Debounced update - limit update frequency to avoid spam
+		const scheduleUpdate = (force = false) => {
+			const now = Date.now();
+			if (force || now - lastUpdateTime > 150) {
+				if (updateTimeout) {
+					clearTimeout(updateTimeout);
+					updateTimeout = null;
+				}
+				onUpdate(state);
+				lastUpdateTime = now;
+			} else if (!updateTimeout) {
+				updateTimeout = setTimeout(() => {
+					onUpdate(state);
+					lastUpdateTime = Date.now();
+					updateTimeout = null;
+				}, 150 - (now - lastUpdateTime));
+			}
+		};
 
 		return new Promise((resolve) => {
-			const proc = spawn(piCommand, args, {
-				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env },
-				shell: isWindows,
-			});
+			const proc = spawn("pi", args, {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
@@ -127,50 +142,67 @@ export class AgentProcessManager {
 								textChunks.push(delta.delta || "");
 								const full = textChunks.join("");
 								const last = full.split("\n").filter((l: string) => l.trim()).pop() || "";
-								state.lastWork = last;
 
-								// Add to messages as streaming update
-								if (state.messages.length === 0 ||
-									state.messages[state.messages.length - 1].role !== "assistant") {
-									state.messages.push({
-										role: "assistant",
-										content: full,
-										timestamp: Date.now(),
-									});
-								} else {
-									state.messages[state.messages.length - 1].content = full;
+								// Only update if content changed
+								if (last !== lastContent) {
+									state.lastWork = last;
+									lastContent = full;
+
+									// Add to messages as streaming update
+									if (state.messages.length === 0 ||
+										state.messages[state.messages.length - 1].role !== "assistant") {
+										state.messages.push({
+											role: "assistant",
+											content: full,
+											timestamp: Date.now(),
+										});
+									} else {
+										state.messages[state.messages.length - 1].content = full;
+									}
+									scheduleUpdate();
 								}
-								onUpdate(state);
+							} else if (delta?.type === "thinking_delta") {
+								// Show thinking progress (less frequent updates)
+								const thinking = delta.delta || "";
+								const thinkingMsg = `[Thinking: ${thinking.split("\n").pop() || ""}]`;
+								if (thinkingMsg !== lastContent && thinkingMsg.length < 100) {
+									state.lastWork = thinkingMsg;
+									lastContent = thinkingMsg;
+									scheduleUpdate();
+								}
 							}
 						} else if (event.type === "tool_execution_start") {
 							state.status = "working";
 							state.toolCount++;
-							onUpdate(state);
+							scheduleUpdate(true);
 						} else if (event.type === "message_end") {
 							const msg = event.message;
 							if (msg?.usage && ctx.model?.contextWindow) {
 								state.contextPct = ((msg.usage.input || 0) / ctx.model.contextWindow) * 100;
-								onUpdate(state);
 							}
+							scheduleUpdate(true);
 						} else if (event.type === "agent_end") {
 							const msgs = event.messages || [];
 							const last = [...msgs].reverse().find((m: any) => m.role === "assistant");
 							if (last?.usage && ctx.model?.contextWindow) {
 								state.contextPct = ((last.usage.input || 0) / ctx.model.contextWindow) * 100;
-								onUpdate(state);
 							}
+							scheduleUpdate(true);
 						}
 					} catch {}
 				}
 			});
 
 			proc.stderr!.setEncoding("utf-8");
-			proc.stderr!.on("data", (chunk: string) => {
-				// LOG: Stderr (útil para diagnosticar problemas)
-				console.error(`[agent-team-interactive] STDERR: ${chunk}`);
+			proc.stderr!.on("data", (_chunk: string) => {
+				// Suppress stderr noise from agent process
 			});
 
 			proc.on("close", (code) => {
+				if (updateTimeout) {
+					clearTimeout(updateTimeout);
+				}
+
 				if (buffer.trim()) {
 					try {
 						const event = JSON.parse(buffer);
@@ -184,6 +216,11 @@ export class AgentProcessManager {
 				clearInterval(state.timer);
 				state.elapsed = Date.now() - startTime;
 				state.status = code === 0 ? "idle" : "error";
+
+				// Mark session file as available for resume
+				if (code === 0) {
+					state.sessionFile = agentSessionFile;
+				}
 
 				const full = textChunks.join("");
 				state.lastWork = full.split("\n").filter((l: string) => l.trim()).pop() || "";
@@ -207,13 +244,17 @@ export class AgentProcessManager {
 			});
 
 			proc.on("error", (err) => {
+				if (updateTimeout) {
+					clearTimeout(updateTimeout);
+				}
+
 				clearInterval(state.timer);
 				state.status = "error";
 				state.lastWork = `Error: ${err.message}`;
 				this.processes.delete(key);
 				onUpdate(state);
 				resolve({
-					output: `Error spawning agent: ${err.message}`,
+					output: `Error spawning agent: ${err.message} (code: ${(err as any).code})`,
 					exitCode: 1,
 					elapsed: Date.now() - startTime,
 				});

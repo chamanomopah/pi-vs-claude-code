@@ -1,7 +1,7 @@
 // AgentPanel UI component
 
-import { Box, Text, Container, Spacer, matchesKey, Key, DynamicBorder, type Theme } from "@mariozechner/pi-tui";
-import { getMarkdownTheme as getPiMdTheme } from "@mariozechner/pi-coding-agent";
+import { Box, Text, Container, Spacer, matchesKey, Key, type Theme } from "@mariozechner/pi-tui";
+import { getMarkdownTheme as getPiMdTheme, DynamicBorder } from "@mariozechner/pi-coding-agent";
 import type { AgentSessionState, AgentDef } from "../types.js";
 import { displayName, formatTime } from "../utils.js";
 

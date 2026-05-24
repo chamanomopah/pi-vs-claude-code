@@ -1,6 +1,7 @@
 // TimelineUI component for checkpoint navigation
 
-import { Container, Text, Spacer, matchesKey, Key, DynamicBorder, type Theme } from "@mariozechner/pi-tui";
+import { Container, Text, Spacer, matchesKey, Key, type Theme } from "@mariozechner/pi-tui";
+import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import type { Checkpoint } from "../types.js";
 import { formatTime } from "../utils.js";
 

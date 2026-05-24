@@ -14,6 +14,10 @@ export class SessionStorage {
 		}
 	}
 
+	getSessionDir(): string {
+		return this.sessionDir;
+	}
+
 	getAgentDir(agentName: string): string {
 		const dir = join(this.sessionDir, agentName.toLowerCase().replace(/\s+/g, "-"));
 		if (!existsSync(dir)) {
