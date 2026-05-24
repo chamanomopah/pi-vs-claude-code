@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mermaid Live Editor</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 16px;
+            background: #252526;
+            border-bottom: 1px solid #3c3c3c;
+        }
+        .toolbar button, .toolbar .file-btn {
+            background: #3c3c3c;
+            color: #ccc;
+            border: 1px solid #555;
+            padding: 6px 12px;
+            border-radius: 3px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .toolbar button:hover, .toolbar .file-btn:hover { background: #505050; }
+        .toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .toolbar .path-display {
+            flex: 1;
+            font-size: 12px;
+            color: #858585;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .status {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        .status.ok { background: #2d7d46; color: #fff; }
+        .status.error { background: #c72e2e; color: #fff; }
+        .status.readonly { background: #c2790e; color: #fff; }
+        .split-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        .editor-pane, .preview-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .editor-pane { border-right: 1px solid #3c3c3c; }
+        .pane-header {
+            padding: 4px 12px;
+            background: #2d2d2d;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #858585;
+            letter-spacing: 0.5px;
+        }
+        #editor {
+            flex: 1;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: none;
+            padding: 16px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+        }
+        #preview {
+            flex: 1;
+            padding: 16px;
+            overflow: auto;
+            background: #1e1e1e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #preview svg { max-width: 100%; height: auto; }
+        .mermaid-error {
+            color: #c72e2e;
+            padding: 16px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .popup {
+            position: absolute;
+            background: #252526;
+            border: 1px solid #454545;
+            border-radius: 6px;
+            padding: 12px;
+            min-width: 280px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            z-index: 1000;
+            display: none;
+        }
+        .popup.visible { display: block; }
+        .popup h3 {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: #fff;
+        }
+        .popup .node-info {
+            font-size: 11px;
+            color: #858585;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+        .popup textarea {
+            width: 100%;
+            min-height: 60px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #3c3c3c;
+            border-radius: 3px;
+            padding: 8px;
+            font-family: inherit;
+            font-size: 13px;
+            resize: vertical;
+            margin-bottom: 8px;
+        }
+        .popup textarea:focus { outline: none; border-color: #007acc; }
+        .popup .buttons {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .popup button {
+            padding: 6px 14px;
+            border: none;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .popup .btn-send { background: #007acc; color: #fff; }
+        .popup .btn-send:hover { background: #005a9e; }
+        .popup .btn-cancel { background: #3c3c3c; color: #ccc; }
+        .popup .btn-cancel:hover { background: #505050; }
+        .response-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1001;
+        }
+        .response-modal.visible { display: flex; }
+        .response-content {
+            background: #252526;
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 70vh;
+            overflow: auto;
+            border: 1px solid #454545;
+        }
+        .response-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #3c3c3c;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .response-header h3 { margin: 0; font-size: 14px; }
+        .response-header .close {
+            background: none; border: none;
+            color: #858585; font-size: 18px;
+            cursor: pointer; padding: 0;
+        }
+        .response-header .close:hover { color: #fff; }
+        .response-body { padding: 16px; }
+        .response-body pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-size: 13px;
+            color: #d4d4d4;
+        }
+        .unsaved-indicator {
+            position: absolute;
+            right: 8px; top: 8px;
+            width: 8px; height: 8px;
+            background: #c72e2e;
+            border-radius: 50%;
+            display: none;
+        }
+        .unsaved-indicator.visible { display: block; }
+        .editor-pane { position: relative; }
+        input[type="file"] { display: none; }
+        #mermaidLoaded { display: none; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <label class="file-btn">
+            Open File
+            <input type="file" id="fileInput" accept=".mmd,.mermaid,.txt,.md">
+        </label>
+        <button id="reloadBtn" disabled>Reload</button>
+        <button id="testFileBtn">Load Test</button>
+        <span class="path-display" id="pathDisplay">No file open</span>
+        <span id="statusIndicator" class="status"></span>
+    </div>
+
+    <div class="split-container">
+        <div class="editor-pane">
+            <div class="pane-header">Mermaid Code</div>
+            <div class="unsaved-indicator" id="unsavedIndicator"></div>
+            <textarea id="editor" placeholder="Enter Mermaid diagram code...
+
+Example:
+graph TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Action]
+    B -->|No| D[Alternative]
+    C --> E[End]
+    D --> E"></textarea>
+        </div>
+        <div class="preview-pane">
+            <div class="pane-header">Preview</div>
+            <div id="preview"><div style="color:#858585">Loading Mermaid...</div></div>
+        </div>
+    </div>
+
+    <div class="popup" id="popup">
+        <h3>Node Selected</h3>
+        <div class="node-info" id="nodeInfo"></div>
+        <textarea id="popupInput" placeholder="Enter your message to Pi..."></textarea>
+        <div class="buttons">
+            <button class="btn-cancel" id="popupCancel">Cancel</button>
+            <button class="btn-send" id="popupSend">Send to Pi</button>
+        </div>
+    </div>
+
+    <div class="response-modal" id="responseModal">
+        <div class="response-content">
+            <div class="response-header">
+                <h3>Response from Pi</h3>
+                <button class="close" id="closeResponse">&times;</button>
+            </div>
+            <div class="response-body">
+                <pre id="responseText"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // State
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        const API_BASE = 'http://127.0.0.1:3737';
+        let fileHandle = null;
+        let filePath = null;
+        let isReadOnly = true;
+        let isDirty = false;
+        let lastModified = 0;
+        let saveTimeout = null;
+        let selectedNode = null;
+        let mermaidReady = false;
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Elements
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        const editor = document.getElementById('editor');
+        const preview = document.getElementById('preview');
+        const pathDisplay = document.getElementById('pathDisplay');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const unsavedIndicator = document.getElementById('unsavedIndicator');
+        const fileInput = document.getElementById('fileInput');
+        const reloadBtn = document.getElementById('reloadBtn');
+        const testFileBtn = document.getElementById('testFileBtn');
+        const popup = document.getElementById('popup');
+        const nodeInfo = document.getElementById('nodeInfo');
+        const popupInput = document.getElementById('popupInput');
+        const popupSend = document.getElementById('popupSend');
+        const popupCancel = document.getElementById('popupCancel');
+        const responseModal = document.getElementById('responseModal');
+        const responseText = document.getElementById('responseText');
+        const closeResponse = document.getElementById('closeResponse');
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Mermaid Init
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'dark',
+            securityLevel: 'loose',
+            logLevel: 'error'
+        });
+
+        // Wait for mermaid to be ready
+        function waitForMermaid() {
+            if (typeof mermaid !== 'undefined' && mermaid.render) {
+                mermaidReady = true;
+                preview.innerHTML = '<div style="color:#858585">Enter Mermaid code to see preview</div>';
+                updateStatus('ok', 'Ready');
+            } else {
+                setTimeout(waitForMermaid, 100);
+            }
+        }
+        waitForMermaid();
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Render Preview
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        async function renderPreview() {
+            if (!mermaidReady) {
+                preview.innerHTML = '<div style="color:#858585">Loading Mermaid...</div>';
+                return;
+            }
+
+            const code = editor.value.trim();
+            if (!code) {
+                preview.innerHTML = '<div style="color:#858585">Enter Mermaid code to see preview</div>';
+                return;
+            }
+
+            try {
+                const id = 'mermaid-' + Date.now();
+                const { svg } = await mermaid.render(id, code);
+                preview.innerHTML = svg;
+                attachNodeListeners();
+            } catch (err) {
+                preview.innerHTML = `<div class="mermaid-error">${escapeHtml(String(err?.message || err || 'Invalid Mermaid syntax'))}</div>`;
+            }
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Node Selection (Right-click)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        function attachNodeListeners() {
+            const svg = preview.querySelector('svg');
+            if (!svg) return;
+
+            svg.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                const target = e.target;
+                const node = findNodeElement(target);
+                if (node) {
+                    selectedNode = extractNodeInfo(node);
+                    showPopup(e.clientX, e.clientY);
+                }
+            });
+        }
+
+        function findNodeElement(el) {
+            if (!el) return null;
+            if (el.classList && (
+                el.classList.contains('node') ||
+                el.classList.contains('flowchart') ||
+                String(el.getAttribute('class'))?.includes('node')
+            )) return el;
+
+            let parent = el.parentElement;
+            let depth = 0;
+            while (parent && depth < 10) {
+                if (parent.classList && (
+                    parent.classList.contains('node') ||
+                    parent.classList.contains('cluster') ||
+                    parent.getAttribute('data-id')
+                )) return parent;
+                parent = parent.parentElement;
+                depth++;
+            }
+
+            const g = el.closest('g[class*="node"], g[id^="flowchart-"], g[id^="L"]');
+            if (g) return g;
+
+            return null;
+        }
+
+        function extractNodeInfo(nodeEl) {
+            let id = nodeEl.getAttribute('data-id') ||
+                     nodeEl.getAttribute('id') ||
+                     (nodeEl.querySelector('[id]')?.getAttribute('id')) || '';
+
+            id = id.replace(/^flowchart-/, '').replace(/-[0-9]+$/, '') || 'unknown';
+
+            const textEl = nodeEl.querySelector('span, text, .nodeLabel, .label, foreignObject');
+            let text = textEl?.textContent?.trim() || '';
+            if (!text) {
+                text = nodeEl.textContent?.trim().substring(0, 50) || id;
+            }
+
+            return { id, text, rawElement: nodeEl };
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Popup Management
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        function showPopup(x, y) {
+            nodeInfo.textContent = `Node: ${selectedNode.text} (${selectedNode.id})`;
+            popupInput.value = '';
+
+            const rect = popup.getBoundingClientRect();
+            let posX = x + 8;
+            let posY = y + 8;
+
+            if (posX + 280 > window.innerWidth - 16) {
+                posX = x - 288;
+            }
+            if (posY + 200 > window.innerHeight - 16) {
+                posY = y - 200;
+            }
+
+            popup.style.left = posX + 'px';
+            popup.style.top = posY + 'px';
+            popup.classList.add('visible');
+            popupInput.focus();
+        }
+
+        function hidePopup() {
+            popup.classList.remove('visible');
+            selectedNode = null;
+        }
+
+        document.addEventListener('click', (e) => {
+            if (popup.classList.contains('visible') && !popup.contains(e.target)) {
+                hidePopup();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                hidePopup();
+                responseModal.classList.remove('visible');
+            }
+        });
+
+        popupCancel.addEventListener('click', hidePopup);
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Web Bridge Communication
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        async function sendToWebBridge(nodeId, nodeText, userInput) {
+            hidePopup();
+
+            const body = {
+                source: 'mermaid-editor',
+                payload: {
+                    nodeId,
+                    nodeText,
+                    userInput,
+                    mermaidCode: editor.value
+                }
+            };
+            if (filePath) {
+                body.meta = { file_path: filePath };
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/pi/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+
+                if (data.id) {
+                    await pollResponse(data.id);
+                } else {
+                    showResponse('Error: ' + (data.error || 'No ID returned'));
+                }
+            } catch (e) {
+                showResponse('Cannot connect to Web Bridge. Start Pi with: pi -e extensions/web-bridge.ts\n\n' + e.message);
+            }
+        }
+
+        async function pollResponse(id) {
+            showResponse('Waiting for response...', true);
+
+            for (let i = 0; i < 60; i++) {
+                try {
+                    const res = await fetch(`${API_BASE}/poll/${id}`);
+                    const data = await res.json();
+
+                    if (data.status === 'complete') {
+                        showResponse(data.response || '(empty response)');
+                        return;
+                    }
+                    if (data.status === 'error') {
+                        showResponse('Error: ' + (data.error || 'Unknown error'));
+                        return;
+                    }
+                    await new Promise(r => setTimeout(r, 500));
+                } catch (e) {
+                    showResponse('Polling failed: ' + e.message);
+                    return;
+                }
+            }
+            showResponse('Timeout: No response after 30 seconds');
+        }
+
+        function showResponse(text, isLoading = false) {
+            responseText.textContent = text;
+            if (!isLoading) {
+                responseModal.classList.add('visible');
+            }
+        }
+
+        closeResponse.addEventListener('click', () => {
+            responseModal.classList.remove('visible');
+        });
+
+        popupSend.addEventListener('click', () => {
+            const input = popupInput.value.trim();
+            if (!input) {
+                popupInput.focus();
+                return;
+            }
+            sendToWebBridge(selectedNode.id, selectedNode.text, input);
+        });
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // File Handling
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        async function openFile() {
+            if ('showOpenFilePicker' in window) {
+                try {
+                    const [handle] = await window.showOpenFilePicker({
+                        types: [{ description: 'Mermaid Files', accept: { 'text/*': ['.mmd', '.mermaid', '.txt', '.md'] } }]
+                    });
+                    fileHandle = handle;
+                    await loadFile();
+                } catch (e) {
+                    if (e.name !== 'AbortError') console.error(e);
+                }
+            } else {
+                fileInput.click();
+            }
+        }
+
+        async function loadFile(file = null) {
+            try {
+                let text;
+                if (file) {
+                    text = await file.text();
+                    filePath = file.name;
+                    isReadOnly = true;
+                } else if (fileHandle) {
+                    const fileObj = await fileHandle.getFile();
+                    text = await fileObj.text();
+                    filePath = fileObj.name;
+                    lastModified = fileObj.lastModified;
+                    isReadOnly = false;
+                } else {
+                    return;
+                }
+
+                editor.value = text;
+                isDirty = false;
+                unsavedIndicator.classList.remove('visible');
+                updateUI();
+                await renderPreview();
+                startFileWatcher();
+            } catch (e) {
+                console.error('Load error:', e);
+                updateStatus('error', 'Load failed');
+            }
+        }
+
+        async function saveFile() {
+            if (isReadOnly || !fileHandle) {
+                updateStatus('readonly', 'Read-only');
+                return false;
+            }
+
+            try {
+                const writable = await fileHandle.createWritable();
+                await writable.write(editor.value);
+                await writable.close();
+                const fileObj = await fileHandle.getFile();
+                lastModified = fileObj.lastModified;
+                isDirty = false;
+                unsavedIndicator.classList.remove('visible');
+                updateStatus('ok', 'Saved');
+                return true;
+            } catch (e) {
+                console.error('Save error:', e);
+                updateStatus('error', 'Save failed');
+                return false;
+            }
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // File Watcher
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let watcherInterval = null;
+
+        function startFileWatcher() {
+            if (watcherInterval) clearInterval(watcherInterval);
+            if (!fileHandle || isReadOnly) return;
+
+            watcherInterval = setInterval(async () => {
+                try {
+                    const fileObj = await fileHandle.getFile();
+                    if (fileObj.lastModified > lastModified && !isDirty) {
+                        const text = await fileObj.text();
+                        editor.value = text;
+                        lastModified = fileObj.lastModified;
+                        await renderPreview();
+                        updateStatus('ok', 'Reloaded');
+                    }
+                } catch (e) {
+                    console.warn('Watcher error:', e);
+                }
+            }, 1000);
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Auto-save on edit
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        editor.addEventListener('input', async () => {
+            isDirty = true;
+            unsavedIndicator.classList.add('visible');
+
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(async () => {
+                await renderPreview();
+                if (!isReadOnly && fileHandle) {
+                    await saveFile();
+                }
+            }, 500);
+        });
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // UI Updates
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        function updateUI() {
+            pathDisplay.textContent = filePath || 'No file open';
+            reloadBtn.disabled = isReadOnly || !fileHandle;
+            updateStatus(isReadOnly ? 'readonly' : 'ok', isReadOnly ? 'Read-only' : 'Ready');
+        }
+
+        function updateStatus(type, text) {
+            statusIndicator.className = 'status ' + type;
+            statusIndicator.textContent = text;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Event Handlers
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        document.querySelector('.file-btn').addEventListener('click', openFile);
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) loadFile(e.target.files[0]);
+        });
+
+        testFileBtn.addEventListener('click', () => {
+            editor.value = `graph TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Action 1]
+    B -->|No| D[Action 2]
+    C --> E[End]
+    D --> E
+    style A fill:#2d7d46,stroke:#1a5c32,stroke-width:2px
+    style E fill:#c72e2e,stroke:#8b1a1a,stroke-width:2px
+    style B fill:#c2790e,stroke:#8a5a0a,stroke-width:2px`;
+            filePath = 'test-diagram.mmd';
+            isReadOnly = true;
+            isDirty = false;
+            updateUI();
+            renderPreview();
+        });
+
+        reloadBtn.addEventListener('click', async () => {
+            if (fileHandle && !isReadOnly) {
+                await loadFile();
+                updateStatus('ok', 'Reloaded');
+            }
+        });
+
+        // Load test content on start
+        testFileBtn.click();
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+graph TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Action 1]
+    B -->|No| D[Action 2]
+    C --> E[End]
+    D --> E
+    style A fill:#2d7d46,stroke:#1a5c32,stroke-width:2px
+    style E fill:#c72e2e,stroke:#8b1a1a,stroke-width:2px
+    style B fill:#c2790e,stroke:#8a5a0a,stroke-width:2px

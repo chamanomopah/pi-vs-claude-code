@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Bridge Test</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { margin: 0 0 8px 0; color: #333; }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+        .form-group { margin: 20px 0; }
+        label { display: block; margin-bottom: 6px; font-weight: 500; color: #555; }
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        textarea { min-height: 120px; font-family: monospace; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .response {
+            margin-top: 20px;
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .response.pending { border-left-color: #ffc107; }
+        .response.error { border-left-color: #dc3545; }
+        .response-title { font-weight: 600; margin-bottom: 8px; }
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-size: 13px;
+            color: #333;
+        }
+        .msg-id { font-family: monospace; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Web Bridge Test</h1>
+        <span id="status" class="status disconnected">Checking...</span>
+
+        <form id="form">
+            <div class="form-group">
+                <label>Source</label>
+                <input type="text" id="source" value="browser-test" placeholder="e.g. browser-test">
+            </div>
+
+            <div class="form-group">
+                <label>Payload (JSON)</label>
+                <textarea id="payload" placeholder='{"text": "Hello from web!"}'>{
+  "text": "Hello from web bridge!",
+  "question": "Can you hear me?"
+}</textarea>
+            </div>
+
+            <div class="form-group">
+                <label>File Path (optional)</label>
+                <input type="text" id="filePath" placeholder="e.g. /path/to/file.md">
+            </div>
+
+            <button type="submit" id="submitBtn">Send to Pi</button>
+        </form>
+
+        <div id="responseArea" style="display: none;"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:3737';
+        const statusEl = document.getElementById('status');
+        const form = document.getElementById('form');
+        const responseArea = document.getElementById('responseArea');
+        const submitBtn = document.getElementById('submitBtn');
+
+        async function checkHealth() {
+            try {
+                const res = await fetch(`${API_BASE}/health`);
+                const data = await res.json();
+                statusEl.textContent = `Connected (${data.pending} pending)`;
+                statusEl.className = 'status connected';
+                return true;
+            } catch (e) {
+                statusEl.textContent = 'Disconnected - is Pi running with web-bridge?';
+                statusEl.className = 'status disconnected';
+                return false;
+            }
+        }
+
+        async function pollResponse(id) {
+            responseArea.style.display = 'block';
+            responseArea.className = 'response pending';
+            responseArea.innerHTML = `
+                <div class="response-title">Waiting for response...</div>
+                <div class="msg-id">Message ID: ${id}</div>
+                <pre>Polling for response...</pre>
+            `;
+
+            const maxAttempts = 60;
+            for (let i = 0; i < maxAttempts; i++) {
+                try {
+                    const res = await fetch(`${API_BASE}/poll/${id}`);
+                    const data = await res.json();
+
+                    if (data.status === 'complete') {
+                        responseArea.className = 'response';
+                        responseArea.innerHTML = `
+                            <div class="response-title">Response received</div>
+                            <div class="msg-id">Message ID: ${id}</div>
+                            <pre>${escapeHtml(data.response || '(empty)')}</pre>
+                        `;
+                        submitBtn.disabled = false;
+                        return;
+                    }
+
+                    if (data.status === 'error') {
+                        responseArea.className = 'response error';
+                        responseArea.innerHTML = `
+                            <div class="response-title">Error</div>
+                            <div class="msg-id">Message ID: ${id}</div>
+                            <pre>${escapeHtml(data.error || 'Unknown error')}</pre>
+                        `;
+                        submitBtn.disabled = false;
+                        return;
+                    }
+
+                    await new Promise(r => setTimeout(r, 500));
+                } catch (e) {
+                    responseArea.className = 'response error';
+                    responseArea.innerHTML = `
+                        <div class="response-title">Polling failed</div>
+                        <pre>${escapeHtml(e.message)}</pre>
+                    `;
+                    submitBtn.disabled = false;
+                    return;
+                }
+            }
+
+            responseArea.className = 'response error';
+            responseArea.innerHTML = `
+                <div class="response-title">Timeout</div>
+                <div class="msg-id">Message ID: ${id}</div>
+                <pre>No response received after 30 seconds</pre>
+            `;
+            submitBtn.disabled = false;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            if (!await checkHealth()) {
+                alert('Cannot connect to Web Bridge. Make sure Pi is running with: pi -e extensions/web-bridge.ts');
+                return;
+            }
+
+            const source = document.getElementById('source').value;
+            let payload;
+            try {
+                payload = JSON.parse(document.getElementById('payload').value);
+            } catch (e) {
+                alert('Invalid JSON in payload field');
+                return;
+            }
+
+            const filePath = document.getElementById('filePath').value;
+
+            const body = { source, payload };
+            if (filePath) {
+                body.meta = { file_path: filePath };
+            }
+
+            submitBtn.disabled = true;
+            responseArea.style.display = 'block';
+            responseArea.className = 'response pending';
+            responseArea.innerHTML = '<pre>Sending...</pre>';
+
+            try {
+                const res = await fetch(`${API_BASE}/pi/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+
+                if (data.id) {
+                    pollResponse(data.id);
+                } else {
+                    throw new Error(data.error || 'No ID returned');
+                }
+            } catch (e) {
+                responseArea.className = 'response error';
+                responseArea.innerHTML = `<pre>Error: ${escapeHtml(e.message)}</pre>`;
+                submitBtn.disabled = false;
+            }
+        });
+
+        checkHealth();
+        setInterval(checkHealth, 5000);
+    </script>
+</body>
+</html>
