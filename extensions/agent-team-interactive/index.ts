@@ -194,13 +194,6 @@ export default function (pi: ExtensionAPI) {
 			const { agent, message } = params as { agent: string; message: string };
 
 			try {
-				if (onUpdate) {
-					onUpdate({
-						content: [{ type: "text", text: `Talking to ${agent}...` }],
-						details: { agent, message, status: "talking" },
-					});
-				}
-
 				const agentDef = allAgentDefs.find(d => d.name.toLowerCase() === agent.toLowerCase());
 				if (!agentDef) {
 					return {
@@ -215,29 +208,68 @@ export default function (pi: ExtensionAPI) {
 				selectedAgent = agentDef.name;
 				updateFooter();
 
+				// Get agent color for consistent display
+				const agentColor = agentDef.agentColor || getAgentColor(agentDef.name);
+
 				const result = await processManager.spawnAgent(
 					agentDef,
 					message,
 					ctx,
 					(state) => {
-						messageManager.postStreamingUpdate(agentDef.name, agentDef, state);
+						// Stream updates to tool feed via onUpdate
+						if (onUpdate) {
+							const statusIcon = state.status === "thinking" ? "●"
+								: state.status === "working" ? "⚙"
+								: state.status === "error" ? "✗"
+								: "✓";
+
+							const statusColor = state.status === "thinking" ? "accent"
+								: state.status === "working" ? "warning"
+								: state.status === "error" ? "error"
+								: "success";
+
+							const elapsed = Math.round(state.elapsed / 1000);
+							const header = `${statusIcon} ${agentDef.name} ${elapsed}s`;
+
+							// Build content with accumulated fullContent
+							let contentText = header;
+							if (state.fullContent) {
+								contentText += "\n\n" + state.fullContent;
+							} else if (state.lastWork) {
+								contentText += "\n\n" + state.lastWork;
+							}
+
+							onUpdate({
+								content: [{ type: "text", text: contentText }],
+								details: {
+									agent: agentDef.name,
+									message,
+									status: state.status === "idle" ? "done" : state.status,
+									elapsed: state.elapsed,
+									agentColor,
+								},
+							});
+						}
+
+						// Also update footer for status icons
 						updateFooter();
 					},
 				);
 
 				const status = result.exitCode === 0 ? "done" : "error";
-				const summary = `[${agentDef.name}] ${status} in ${Math.round(result.elapsed / 1000)}s`;
-
-				messageManager.postMessage(agentDef.name, agentDef, processManager.getState(agentDef.name)!);
+				const elapsed = Math.round(result.elapsed / 1000);
+				const icon = result.exitCode === 0 ? "✓" : "✗";
+				const header = `${icon} ${agentDef.name} ${elapsed}s`;
 
 				return {
-					content: [{ type: "text", text: `${summary}\n\n${result.output}` }],
+					content: [{ type: "text", text: `${header}\n\n${result.output}` }],
 					details: {
-						agent,
+						agent: agentDef.name,
 						message,
 						status,
 						elapsed: result.elapsed,
 						exitCode: result.exitCode,
+						agentColor,
 					},
 				};
 			} catch (err: any) {
@@ -269,21 +301,44 @@ export default function (pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
 
-			if (options.isPartial || details.status === "talking") {
+			const agentColor = details.agentColor || "accent";
+			const agentName = details.agent || "?";
+
+			// Streaming state - show accumulated content
+			if (options.isPartial || details.status === "thinking" || details.status === "working") {
+				const statusIcon = details.status === "working" ? "⚙" : "●";
+				const elapsed = typeof details.elapsed === "number" ? Math.round(details.elapsed / 1000) : 0;
+				const header = theme.fg(agentColor, `${statusIcon} ${agentName} ${elapsed}s`);
+
+				const contentText = result.content[0]?.type === "text" ? result.content[0].text : "";
+				const lines = contentText.split("\n");
+				const bodyContent = lines.length > 1 ? contentText.substring(contentText.indexOf("\n") + 1) : "";
+
 				return new Text(
-					theme.fg("accent", `● ${details.agent || "?"}`) +
-					theme.fg("dim", " responding..."),
+					header +
+					(bodyContent ? "\n\n" + theme.fg("dim", bodyContent) : ""),
 					0,
 					0,
 				);
 			}
 
-			const icon = details.status === "done" ? "✓" : "✗";
-			const color = details.status === "done" ? "success" : "error";
+			// Final state - show summary
+			const isSuccess = details.status === "done" || details.status === "idle" || details.status === "talking";
+			const icon = isSuccess ? "✓" : "✗";
+			const color = isSuccess ? "success" : "error";
 			const elapsed = typeof details.elapsed === "number" ? Math.round(details.elapsed / 1000) : 0;
-			const header = theme.fg(color, `${icon} ${details.agent}`) + theme.fg("dim", ` ${elapsed}s`);
+			const header = theme.fg(color, `${icon} ${agentName}`) + theme.fg("dim", ` ${elapsed}s`);
 
-			return new Text(header, 0, 0);
+			const contentText = result.content[0]?.type === "text" ? result.content[0].text : "";
+			const lines = contentText.split("\n");
+			const bodyContent = lines.length > 1 ? contentText.substring(contentText.indexOf("\n") + 1) : "";
+
+			return new Text(
+				header +
+				(bodyContent ? "\n\n" + theme.fg("dim", bodyContent) : ""),
+				0,
+				0,
+			);
 		},
 	});
 

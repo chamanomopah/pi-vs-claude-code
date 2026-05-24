@@ -59,6 +59,7 @@ export interface AgentSessionState {
 	checkpoints: Checkpoint[];
 	currentCheckpointIndex: number;
 	lastWork: string;
+	fullContent: string;
 	toolCount: number;
 	elapsed: number;
 	contextPct: number;

@@ -47,6 +47,7 @@ export class AgentProcessManager {
 			checkpoints: [],
 			currentCheckpointIndex: -1,
 			lastWork: "",
+			fullContent: "",
 			toolCount: 0,
 			elapsed: 0,
 			contextPct: 0,
@@ -141,6 +142,7 @@ export class AgentProcessManager {
 							if (delta?.type === "text_delta") {
 								textChunks.push(delta.delta || "");
 								const full = textChunks.join("");
+								state.fullContent = full;
 								const last = full.split("\n").filter((l: string) => l.trim()).pop() || "";
 
 								// Only update if content changed
@@ -223,6 +225,7 @@ export class AgentProcessManager {
 				}
 
 				const full = textChunks.join("");
+				state.fullContent = full;
 				state.lastWork = full.split("\n").filter((l: string) => l.trim()).pop() || "";
 
 				// Save final message
